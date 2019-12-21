@@ -95,7 +95,25 @@
     (let ((num-ones (loop for row across min-layer sum (length (remove-if-not (lambda (n) (= 1 n)) row))))
 	  (num-twos (loop for row across min-layer sum (length (remove-if-not (lambda (n) (= 2 n)) row)))))
       (format t "Result: ~a~%" (* num-ones num-twos))))
-	    
+
+  ;; now, compose the images
+  (let ((image (copy-seq (elt *input* (1- (length *input*))))))
+    (do ((layer (- (length *input*) 2) (- layer 1)))
+	((= layer -1))
+      (format t "compositing layer ~a~%" layer)
+      (dotimes (row (second *dimensions*))
+	(dotimes (col (first *dimensions*))
+	  (let ((lval (elt (elt (elt *input* layer) row) col)))
+	    (if (< lval 2)
+		(setf (elt (elt image row) col) lval))))))
+    (format t "Final image:~%~a~%" image)
+    (loop for row across image
+       do (progn
+	    (do ((col 0 (1+ col)))
+		((= (first *dimensions*) col))
+	      (format t "~a" (if (= 1 (elt row col)) "X" " ")))
+	    (format t "~%"))))
+  
   0)
 
 (sb-ext:exit :code (main sb-ext:*posix-argv*))
