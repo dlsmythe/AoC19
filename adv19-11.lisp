@@ -329,15 +329,15 @@
   (let ((opts '(("v" :required nil)
 		("p" :required nil)
 		("f" :required nil))))
-      (multiple-value-bind (new-args vals) (getopt:getopt args opts)
-	(dolist (arg vals)
-	  (cond ((string= "v" (car arg))
-		 (setf *verbose* (parse-integer (cdr arg))))
-		((string= "p" (car arg))
-		 (setf *part* (parse-integer (cdr arg))))
-		((string= "f" (car arg))
-		 (setf *progfile* (cdr arg)))))
-	(setf args new-args)))
+    (multiple-value-bind (new-args vals) (getopt:getopt args opts)
+      (dolist (arg vals)
+	(cond ((string= "v" (car arg))
+	       (setf *verbose* (parse-integer (cdr arg))))
+	      ((string= "p" (car arg))
+	       (setf *part* (parse-integer (cdr arg))))
+	      ((string= "f" (car arg))
+	       (setf *progfile* (cdr arg)))))
+      (setf args new-args)))
   
   (let ((code (read-program *progfile*))
 	(program (make-program)))
@@ -345,7 +345,7 @@
 	  (make-array (list (length code)) :fill-pointer (length code) :adjustable t :initial-contents code))
     (setf (elt *progv* 0) program))
 
-  ;(dump-program "Original" (elt *progv* 0))
+;; (dump-program "Original" (elt *progv* 0))
 
   (let ((panels-seen (make-hash-table :test #'equal))
 	(total-steps 0)
@@ -357,9 +357,10 @@
 	(max-y most-negative-fixnum)
 	(dir 'NORTH))
     
-    (setf (gethash (format nil "~a ~a" x y) panels-seen) 1)
+    ;; Set the color of the hull panel on which we start.
+    (setf (gethash (format nil "~a ~a" x y) panels-seen) (if (= *part* 1) 0 1))
     
-    ;; set up the i/o redirection hooks
+    ;; set up the intcode machine's i/o redirection hooks
     (setf (program-input (elt *progv* 0))
 	  (lambda ()
 	    ;; read value from hull
@@ -370,7 +371,7 @@
 		  val))))
 
     (let ((last-value-written nil)) ; "last-value-written" controls whether we interpret
-				    ; the input as a value or a direction
+					; the input as a value or a direction
       (setf (program-redirect-output-to (elt *progv* 0))
 	    (lambda (value)
 	      ;; write value to hull or move
@@ -405,6 +406,7 @@
     (when (> *verbose* 1)
       (dump-prog-state "orig" (elt *progv* 0)))
       
+    ;; Run the painting program.
     (do ((done nil))
 	(done)
       (let ((result (run-intcode-program (elt *progv* 0))))
@@ -415,29 +417,25 @@
     (format t "Covered ~a panels in ~a steps. Extent: (~a,~a) - (~a,~a)~%"
 	    (hash-table-count panels-seen) total-steps min-x min-y max-x max-y)
 
-    (let ((map (make-array (list (1+ (- max-y min-y))))))
-      (dotimes (y (length map))
-	(setf (elt map y) (make-array (list (1+ (- max-x min-x))) :element-type 'character :initial-element #\#)))
-	
-      ;; (format t "empty map:~%")
-      ;; (dotimes (y (length map))
-      ;; 	(format t "~a~%" (elt map y)))
+    (when (= *part* 2)    
+      (let ((map (make-array (list (1+ (- max-y min-y))))))
+	(dotimes (y (length map))
+	  (setf (elt map y) (make-array (list (1+ (- max-x min-x))) :element-type 'character :initial-element #\#)))
 
-      (format t "making map~%")
-      (loop for pos-str being the hash-keys in panels-seen using (hash-value paint-value)
-	 do (multiple-value-bind (parsedok vals) (cl-ppcre:scan-to-strings "^(-?\\d+) (-?\\d+)" pos-str)
-	      (when (not parsedok)
-		(format t "bad position: ~a ~%" pos-str)
-		(sb-ext:exit :code 1))
-	      (let ((x (parse-integer (elt vals 0)))
-		    (y (parse-integer (elt vals 1))))
-		(format t "adding position ~a: = ~a,~a~%" pos-str x y)
-		(format t "map[~a,~a] is currently [~a]~%" x y (elt (elt map (- y min-y)) (- x min-x)))
-		(setf (elt (elt map (- y min-y)) (- x min-x))
-		      (if (= paint-value 0) #\# #\Space)))))
+	(loop for pos-str being the hash-keys in panels-seen using (hash-value paint-value)
+	   do (multiple-value-bind (parsedok vals) (cl-ppcre:scan-to-strings "^(-?\\d+) (-?\\d+)" pos-str)
+		(when (not parsedok)
+		  (format t "bad position: ~a ~%" pos-str)
+		  (sb-ext:exit :code 1))
+		(let ((x (parse-integer (elt vals 0)))
+		      (y (parse-integer (elt vals 1))))
+		  (vprint 2 "adding position ~a: = ~a,~a~%" pos-str x y)
+		  (setf (elt (elt map (- y min-y)) (- x min-x))
+			(if (= paint-value 0) #\# #\Space)))))
 
-      (loop for y downto 0 downfrom (1- (length map))
-	do (format t "~a~%" (elt map y)))))
+	;; It prints upside-down -- flip it for convenience.
+	(loop for y downto 0 downfrom (1- (length map))
+	   do (format t "~a~%" (elt map y))))))
   0)
 
 (sb-ext:exit :code (main sb-ext:*posix-argv*))
