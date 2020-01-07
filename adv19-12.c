@@ -8,6 +8,7 @@
 #include <string.h>
 #include <errno.h>
 #include <err.h>
+#include <ctype.h>
 #include <limits.h>
 #include <math.h>
 #include <assert.h>
@@ -17,8 +18,8 @@
 
 int verbose = 0;
 char *input_file = "adv19-12.input";
+char *resume_file = NULL;
 int part = 1;
-int max_iterations = 0;
 
 typedef struct moon_s {
     union {
@@ -40,34 +41,51 @@ typedef struct moon_s {
 } moon_t;
 
 moon_t moonv[4];
+int moonv_len;
+moon_t resume_moonv[4];
+int resume_moonv_len;
 
-void add_moon(int x, int y, int z)
+void add_moon(moon_t *moons, int *count_p, int x, int y, int z, int dx, int dy, int dz)
 {
-    static int i = 0;
-
-    assert(i < LENGTHOF(moonv));
-    printf("Add moon %d: (%d,%d,%d)\n", i, x, y, z);
-    moonv[i].pos.all = 0;
-    moonv[i].vel.all = 0;
-    moonv[i].pos.pos.x = x;
-    moonv[i].pos.pos.y = y;
-    moonv[i].pos.pos.z = z;
-    i++;
+    printf("Add moon %d: (%d,%d,%d)/(%d,%d,%d)\n", *count_p, x, y, z, dx, dy, dz);
+    moons[*count_p].pos.all = 0;
+    moons[*count_p].vel.all = 0;
+    moons[*count_p].pos.pos.x = x;
+    moons[*count_p].pos.pos.y = y;
+    moons[*count_p].pos.pos.z = z;
+    moons[*count_p].vel.vel.x = dx;
+    moons[*count_p].vel.vel.y = dy;
+    moons[*count_p].vel.vel.z = dz;
+    (*count_p)++;
 }
 
-void read_input(void)
+void read_input(int is_resume_file, char *filename, uint64_t *step_number_p)
 {
     FILE *infp;
     char buf[80];
+    *step_number_p = 1;
 
-    infp = fopen(input_file, "r");
+    infp = fopen(filename, "r");
     if (NULL == infp)
 	err(1, "fopen(%s)", input_file);
     while (fgets(buf, sizeof buf, infp) != NULL) {
-	int x, y, z;
+	int x, y, z, dx=0, dy=0, dz=0;
+	char *p;
+	if (buf[0] == '#')
+	    continue;
+	if (is_resume_file && isdigit(buf[0])) {
+	    *step_number_p = strtoull(buf, NULL, 0);
+	    continue;
+	}
 	if (3 != sscanf(buf, "<x=%d, y=%d, z=%d>", &x, &y, &z))
 	    err(1, "Bad format: %s", buf);
-	add_moon(x, y, z);
+	if ((p = strchr(buf, '/'))) {
+	    if (3 != sscanf(p+1, "<dx=%d, dy=%d, dz=%d>", &dx, &dy, &dz))
+		err(1, "Bad velocity format: %s", buf);
+	}
+	add_moon(is_resume_file ? resume_moonv : moonv,
+		 is_resume_file ? &resume_moonv_len : &moonv_len,
+		 x, y, z, dx, dy, dz);
     }
     fclose(infp);
 }
@@ -131,6 +149,7 @@ void print_state(char *msg, uint64_t state_index, moon_t *state)
     }
 }
 
+#if 0
 int states_equal(moon_t *s0, moon_t *s1)
 {
     int i;
@@ -147,16 +166,28 @@ int states_equal(moon_t *s0, moon_t *s1)
     }
     return 1;
 }
+#else
+# define states_equal(s0,s1)			\
+    (s0[0].pos.all == s1[0].pos.all &&		\
+     s0[1].pos.all == s1[1].pos.all &&		\
+     s0[2].pos.all == s1[2].pos.all &&		\
+     s0[3].pos.all == s1[3].pos.all)
+#endif
     
 int main(int argc, char **argv)
 {
     int c;
+    uint64_t state_index = 1;
+    int max_iterations = 0;
 
     setlocale(LC_NUMERIC, "");
-    while ((c = getopt(argc, argv, "v:f:p:m:")) != EOF) {
+    while ((c = getopt(argc, argv, "v:f:p:m:r:")) != EOF) {
 	switch (c) {
 	case 'f':
 	    input_file = strdup(optarg);
+	    break;
+	case 'r':
+	    resume_file = strdup(optarg);
 	    break;
 	case 'v':
 	    verbose = atoi(optarg);
@@ -170,7 +201,9 @@ int main(int argc, char **argv)
 	}
     }
 
-    read_input();
+    read_input(0, input_file, &state_index);
+    if (resume_file)
+	read_input(1, resume_file, &state_index);
     
     if (1 == part) {
 	int i;
@@ -181,31 +214,24 @@ int main(int argc, char **argv)
     }
 
     if (2 == part) {
-	moon_t slow_state[LENGTHOF(moonv)];
-	moon_t fast_state[LENGTHOF(moonv)];
-	uint64_t slow_index = 0;
-	uint64_t fast_index = 1;
-	int i;
-	for (i = 0; i < LENGTHOF(moonv); i++) {
-	    slow_state[i] = moonv[i];
-	    fast_state[i] = moonv[i];
+	static moon_t initial_state[LENGTHOF(moonv)];
+	memcpy(initial_state, moonv, sizeof(moonv));
+	if (resume_file) {
+	    memcpy(moonv, resume_moonv, sizeof(moonv));
+	} else {
+	    do_one_timestep(moonv);
+	    state_index++;
 	}
-	do_one_timestep(fast_state);
-	while (!states_equal(slow_state, fast_state)  &&  (0 == max_iterations  ||  fast_index < max_iterations)) {
-	    if (0 == (fast_index % 10000000) || (verbose > 1)) {
-		print_state("Fast", fast_index, fast_state);
+	while (!states_equal(initial_state, moonv)  &&  (0 == max_iterations  ||  state_index < max_iterations)) {
+	    if (0 == (state_index % 10000000) || (verbose > 1)) {
+		print_state("State", state_index, moonv);
 	    }
-	    if (0 == (fast_index % 2)) {
-		slow_index++;
-		do_one_timestep(slow_state);
-	    }
-	    fast_index++;
-	    do_one_timestep(fast_state);
+	    state_index++;
+	    do_one_timestep(moonv);
 	}
-	if (0 == max_iterations  ||  fast_index < max_iterations)
-	    printf("Sequence repeats at step %lu/%lu.  Cycle-length %lu.\n",
-		   fast_index, slow_index, fast_index - slow_index);
-	print_state("Fast", fast_index, fast_state);
+	if (states_equal(initial_state, moonv))
+	    printf("Sequence repeats at step %lu.\n", state_index);
+	print_state("State", state_index, moonv);
     }
     
     return 0;
